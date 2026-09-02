@@ -76,6 +76,12 @@ class Fantacalcio:
         with self.lock:
             self._cache_plots[to_analyze] = all_data
 
+        return all_data
+
+    def search_role(self, name):
+        player = self.data_player(self._merged, name)
+        return player["Ruolo"].unique()[0]
+
     def process_file(self, fanta_name):
         fanta_df = pd.read_excel(f"{self._folder_data}/{fanta_name}.xlsx", header=1)
         year = fanta_name.split("_")[1]
@@ -194,9 +200,6 @@ class Fantacalcio:
         player_to_analyze = self.data_player(df, player_search, role)
         if len(player_to_analyze) == 0:
             print("No chart generated. player not found: " + player_search)
-            return
-        elif player_to_analyze["Nome"].nunique() > 1:
-            print("No chart generated. more than one player found: " + player_search)
             return
         data = {}
         summary_data = self.summary_2026_market(player_to_analyze)
