@@ -1,0 +1,6 @@
+[logger]
+# Level of logging for Streamlit's internal logger: "error", "warning", "info", or "debug".
+level = "info"
+
+# String format for logging messages.
+messageFormat = "%(asctime)s %(message)s"

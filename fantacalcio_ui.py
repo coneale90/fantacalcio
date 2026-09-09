@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from fantacalcio_core import Fantacalcio
+from fantcalcio_market import FantacalcioMarket
 
 # Use full-width layout for the app.
 st.set_page_config(page_title="Conecalcio 2026", layout="wide")
@@ -16,19 +17,13 @@ class FantacalcioUI:
     def __init__(self):
         self._fc = Fantacalcio()
         self._player_options = self._fc.all_names()
+        self._market = FantacalcioMarket()
         self._player = ''
         self._credit = 500
         if "input_price" not in st.session_state:
             st.session_state.input_price = 0.0
         if "reset_input_price" not in st.session_state:
             st.session_state.reset_input_price = False
-        self._my_game: dict[str, list[dict[str, str | float]]] = {
-            'all_players': [],
-            'portieri': [],
-            'difensori': [],
-            'centrocampisti': [],
-            'attacanti': [],
-        }
 
     def _compute_player(self, player_name: str) -> dict:
         return self._fc.compute_player(player_name)
@@ -48,7 +43,7 @@ class FantacalcioUI:
         with button_col_1:
             st.download_button(
                 label="Download",
-                data=self._download,
+                data=self._market.download,
                 file_name=name_file,
                 mime="text/csv",
                 icon=":material/download:",
@@ -59,13 +54,8 @@ class FantacalcioUI:
                 self._import()
 
     def _credits_section(self):
-        st.write(f"Crediti Iniziali: {self._credit}")
-
-        left_credit = self._credit
-        for p in self._my_game['all_players']:
-            left_credit = left_credit - int(p['price'])
-
-        st.write(f"Crediti Rimanenti: {left_credit}")
+        st.write(f"Crediti Iniziali: {self._market.get_total_credit()}")
+        st.write(f"Crediti Rimanenti: {self._market.get_current_credit()}")
 
         if st.session_state.reset_input_price:
             st.session_state.input_price = 0.0
@@ -95,45 +85,51 @@ class FantacalcioUI:
             if buy_button and player is not None and price is not None and price > 0:
                 name = str(player)
                 role = str(self._fc.search_role(name)).upper()
-                already_exists = any(p['name'] == name for p in self._my_game['all_players'])
+                already_exists = self._market.check_player_exists(name)
                 if not already_exists:
                     to_add = {'name': name, 'price': int(price), 'ruolo': role}
-                    self._my_game['all_players'].append(to_add)
-                    if role == 'P':
-                        self._my_game['portieri'].append(to_add)
-                    if role == 'D':
-                        self._my_game['difensori'].append(to_add)
-                    if role == 'C':
-                        self._my_game['centrocampisti'].append(to_add)
-                    if role == 'A':
-                        self._my_game['attacanti'].append(to_add)
+                    self._market.add_player(to_add, role)
                     st.session_state.reset_input_price = True
                     st.rerun()
             if analysis_button:
                 self._player = str(player)
             if sell_button and player is not None:
                 name = str(player)
-                self._my_game['all_players'] = [p for p in self._my_game['all_players'] if p['name'] != name]
-                self._my_game['portieri'] = [p for p in self._my_game['portieri'] if p['name'] != name]
-                self._my_game['difensori'] = [p for p in self._my_game['difensori'] if p['name'] != name]
-                self._my_game['centrocampisti'] = [p for p in self._my_game['centrocampisti'] if p['name'] != name]
-                self._my_game['attacanti'] = [p for p in self._my_game['attacanti'] if p['name'] != name]
+                self._market.remove_player(name)
                 st.session_state.reset_input_price = True
                 st.rerun()
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
+            show_goakeeper_button = st.button("👁️", key="show_goalkeeper")
+            if show_goakeeper_button:
+                self._open_dialog_with_best_players_by_group('P', limit=40)
             st.markdown("#### Portieri")
-            self._write_Table(self._my_game['portieri'])
+            self._write_Table(self._market.get_player_list_by_group('portieri'))
         with col2:
+            show_defender_button = st.button("👁️", key="show_defender")
+            if show_defender_button:
+                self._open_dialog_with_best_players_by_group('D', limit=60)
             st.markdown("#### Difensori")
-            self._write_Table(self._my_game['difensori'])
+            self._write_Table(self._market.get_player_list_by_group('difensori'))
         with col3:
+            show_center_button = st.button("👁️", key="show_center")
+            if show_center_button:
+                self._open_dialog_with_best_players_by_group('C', limit=60)
             st.markdown("#### Centrocampisti")
-            self._write_Table(self._my_game['centrocampisti'])
+            self._write_Table(self._market.get_player_list_by_group('centrocampisti'))
         with col4:
+            show_attacker_button = st.button("👁️", key="show_attacker")
+            if show_attacker_button:
+                self._open_dialog_with_best_players_by_group('A', limit=60)
             st.markdown("#### Attacanti")
-            self._write_Table(self._my_game['attacanti'])
+            self._write_Table(self._market.get_player_list_by_group('attacanti'))
+
+    @st.dialog("BestPlayers", width="large")
+    def _open_dialog_with_best_players_by_group(self, group, limit=30):
+        players_df = self._fc.get_best_possible_player_by_role(group, limit, avg_vote_threshold=4.5)
+        st.subheader(f"Top {limit} Giocatori per Ruolo: {group}")
+        st.dataframe(players_df)
 
     def _write_Table(self, players):
         if len(players) == 0:
@@ -189,40 +185,15 @@ class FantacalcioUI:
             if not shown_any_plot:
                 st.info("Nessun grafico disponibile per questo giocatore.")
 
-    def _download(self):
-        data = []
-        for p in self._my_game['all_players']:
-            data.append([p['name'], p['price'], str(p['ruolo']).upper()])
-        df = pd.DataFrame(data)
-        df.columns = ["Nome", "Prezzo", "Ruolo"]
-        return df.to_csv().encode("utf-8")
-
     @st.dialog("Import")
     def _import(self):
         st.subheader("Importa Fantacalcio")
         file = st.file_uploader("Importa Fantacalcio", type="csv")
         if st.button("Upload"):
             if file is not None:
-                self._read_csv_fanta(file)
+                self._market.read_csv_fanta(file)
                 st.success("Fantacalcio importato con successo!")
                 st.rerun()
-
-    def _read_csv_fanta(self, file):
-        df = pd.read_csv(file)
-        for _, row in df.iterrows():
-            name = str(row["Nome"])
-            price = int(row["Prezzo"])
-            role = str(row["Ruolo"]).upper()
-            to_add = {'name': name, 'price': price, 'ruolo': role}
-            self._my_game['all_players'].append(to_add)
-            if role == 'P':
-                self._my_game['portieri'].append(to_add)
-            if role == 'D':
-                self._my_game['difensori'].append(to_add)
-            if role == 'C':
-                self._my_game['centrocampisti'].append(to_add)
-            if role == 'A':
-                self._my_game['attacanti'].append(to_add)
 
 
 if "fantacalcio" not in st.session_state:

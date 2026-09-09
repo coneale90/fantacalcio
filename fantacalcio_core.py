@@ -1,13 +1,15 @@
+import logging
 import os
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from time import sleep
 
 import numpy as np
 import pandas as pd
 from matplotlib.figure import Figure
 from pandas import DataFrame
-from concurrent.futures import ThreadPoolExecutor
 
+logging.basicConfig(level=logging.INFO)
 
 class Fantacalcio:
 
@@ -38,10 +40,11 @@ class Fantacalcio:
             "marketValueChart": None,
             "voteTrendChart": None,
         }
-        self._cache_plots = {}
+        self._calculated_data = {}
+        self._top_players_data = {}
         self._executor = ThreadPoolExecutor(max_workers=2)
         self._executor.submit(self._compute_all_player_2026_background)
-        self.lock = threading.Lock()
+        self._lock = threading.Lock()
 
     def _compute_all_player_2026_background(self):
         sleep(10)
@@ -56,13 +59,13 @@ class Fantacalcio:
     def compute_player(self, to_analyze):
         thread_id = threading.get_ident()
         thread_name = threading.current_thread().name
-        print(f"Thread {thread_id} ({thread_name}) computing {to_analyze}")
+        logging.info(f"Thread {thread_id} ({thread_name}) computing {to_analyze}")
         for key in self.plots:
             self.plots[key] = None
 
-        if to_analyze in self._cache_plots:
-            with self.lock:
-                plots = self._cache_plots[to_analyze]
+        if to_analyze in self._calculated_data:
+            with self._lock:
+                plots = self._calculated_data[to_analyze]
                 has_market_summary = plots is not None and "marketSummary" in plots
                 if has_market_summary:
                     return plots
@@ -73,8 +76,8 @@ class Fantacalcio:
         all_data.update(games_data)
         all_data.update(player_data)
 
-        with self.lock:
-            self._cache_plots[to_analyze] = all_data
+        with self._lock:
+            self._calculated_data[to_analyze] = all_data
 
         return all_data
 
@@ -122,12 +125,13 @@ class Fantacalcio:
             filtered_df = filtered_df[filtered_df["Ruolo"] == role]
         return filtered_df.copy()
 
-    def charts_market(self, df):
+    def charts_market(self, df) -> dict[str, DataFrame | None]:
         columns_needed = ["Quotazione Attuale", "Quatozione Iniziale", "Fanta Valore Mercato", "Anno"]
         missing_columns = [c for c in columns_needed if c not in df.columns]
 
         if missing_columns:
-            print(f"Cannot build charts, missing columns: {missing_columns}")
+            logging.info(f"Cannot build charts, missing columns: {missing_columns}")
+            return {}
         else:
             player_history = df.copy()
             player_history["Anno"] = pd.to_numeric(player_history["Anno"], errors="coerce")
@@ -139,7 +143,8 @@ class Fantacalcio:
             player_history = player_history.sort_values("Anno")
 
             if player_history[["Quotazione Attuale", "Quatozione Iniziale", "Fanta Valore Mercato"]].isna().all().all():
-                print("No chart generated: selected rows do not contain numeric values")
+                logging.info("No chart generated: selected rows do not contain numeric values")
+                return {}
             else:
                 # Streamlit line chart data: quotation trend by year.
                 quotation_df = player_history[["Anno", "Quotazione Attuale", "Quatozione Iniziale"]].dropna(
@@ -159,12 +164,15 @@ class Fantacalcio:
                 }
                 return data
 
-    def summary_2026_market(self, df):
+    def summary_2026_market(self, df) -> dict[str, DataFrame | None]:
         player_history = df.copy()
         team_played_in = player_history["Squadra"].unique().tolist()
         player_2026 = player_history[player_history["Anno"] == "2026"]
         if player_2026.empty:
-            print("No 2026 data available for the selected player")
+            logging.info("No 2026 data available for the selected player")
+            return {
+                "marketSummary": pd.DataFrame()
+            }
         else:
             squadre = ", ".join(team_played_in)
             row_2026 = player_2026.iloc[0]
@@ -196,11 +204,11 @@ class Fantacalcio:
             }
             return data
 
-    def analyze_player(self, df, player_search, role=None):
+    def analyze_player(self, df, player_search, role=None) -> dict[str, DataFrame | None]:
         player_to_analyze = self.data_player(df, player_search, role)
         if len(player_to_analyze) == 0:
-            print("No chart generated. player not found: " + player_search)
-            return
+            logging.info("No chart generated. player not found: " + player_search)
+            return {}
         data = {}
         summary_data = self.summary_2026_market(player_to_analyze)
         marked_data = self.charts_market(player_to_analyze)
@@ -211,18 +219,18 @@ class Fantacalcio:
     def search_vote_player(self, df, player_search, role=None) -> DataFrame | None:
         player_votes = self.data_player(df, player_search, role)
         if len(player_votes) == 0:
-            print("No votes found for the player: " + player_search)
+            logging.info("No votes found for the player: " + player_search)
             return None
         elif player_votes["Nome"].nunique() > 1:
-            print("More than one player found. Please refine your search: " + player_search)
+            logging.info("More than one player found. Please refine your search: " + player_search)
             return None
         player_votes = player_votes.sort_values(["Anno", "Giornata"])
         return player_votes
 
-    def analyze_player_games(self, df, player_search, role=None):
+    def analyze_player_games(self, df, player_search, role=None) -> dict[str, DataFrame | None]:
         games: DataFrame | None = self.search_vote_player(df, player_search, role)
         if games is None:
-            print("No votes found for the player: " + player_search)
+            logging.info("No votes found for the player: " + player_search)
             return None
         games["Voto"] = pd.to_numeric(
             games["Voto"].astype(str).str.replace(",", ".", regex=False).str.replace("*", "",
@@ -315,3 +323,76 @@ class Fantacalcio:
         }
         summary_df = pd.DataFrame(summary_data)
         return summary_df
+
+    def get_best_possible_player_by_role(self, role: str, limit: int = 15,
+        avg_vote_threshold: float = 6.0) -> pd.DataFrame:
+        if role in self._top_players_data:
+            return self._top_players_data[role]
+
+        columns = ["Nome", "Ruolo", "Partite", "Media Voto"]
+        filtered_df = self._merged[
+            (self._merged["Ruolo"] == role)
+            & (self._merged["Anno"].astype(str) == "2026")
+            ]
+        if filtered_df.empty:
+            return pd.DataFrame(columns=columns)
+
+        candidate_names = filtered_df["Nome"].dropna().unique().tolist()
+        if not candidate_names:
+            return pd.DataFrame(columns=columns)
+
+        ranked_rows = []
+        for player_name in candidate_names:
+            player_data = self._calculated_data.get(player_name)
+            if not isinstance(player_data, dict):
+                continue
+
+            summary_df = player_data.get("voteSummary")
+            trend_df = player_data.get("voteTrendChart")
+            if not isinstance(summary_df, pd.DataFrame) or not isinstance(trend_df, pd.DataFrame):
+                continue
+            if not {"Categoria", "Valore"}.issubset(summary_df.columns):
+                continue
+            if "Voto Fantacalcio" not in trend_df.columns:
+                continue
+
+            media_row = summary_df[summary_df["Categoria"] == "Media Voto"]
+            if media_row.empty:
+                continue
+
+            media_voto = pd.to_numeric(media_row.iloc[0]["Valore"], errors="coerce")
+            if pd.isna(media_voto):
+                continue
+            media_voto = float(media_voto)
+            if media_voto <= avg_vote_threshold:
+                continue
+
+            local_df = trend_df[["Voto Fantacalcio"]].copy().reset_index(names="Slot")
+            local_df["Anno"] = pd.to_numeric(local_df["Slot"].astype(str).str.split().str[0], errors="coerce")
+            local_df["Voto Fantacalcio"] = pd.to_numeric(local_df["Voto Fantacalcio"], errors="coerce")
+            local_df = local_df.dropna(subset=["Anno", "Voto Fantacalcio"])
+            if local_df.empty:
+                continue
+
+            above_threshold = local_df[local_df["Voto Fantacalcio"] > avg_vote_threshold]
+            games_2025 = int((above_threshold["Anno"] == 2025).sum())
+            games_2026 = int((above_threshold["Anno"] == 2026).sum())
+            if not ((games_2025 >= 15) or (games_2026 >= 2)):
+                continue
+
+            ranked_rows.append({
+                "Nome": player_name,
+                "Ruolo": role,
+                "Partite": int(len(above_threshold)),
+                "Media Voto": round(media_voto, 2)
+            })
+
+        if not ranked_rows:
+            return pd.DataFrame(columns=columns)
+
+        ranked = pd.DataFrame(ranked_rows)
+        ranked = ranked.sort_values(["Media Voto", "Partite"], ascending=[False, False]).head(limit)
+
+        final = ranked[columns].reset_index(drop=True)
+        self._top_players_data[role] = final
+        return final
