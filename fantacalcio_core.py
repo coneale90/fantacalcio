@@ -6,10 +6,10 @@ from time import sleep
 
 import numpy as np
 import pandas as pd
-from matplotlib.figure import Figure
 from pandas import DataFrame
 
 logging.basicConfig(level=logging.INFO)
+
 
 class Fantacalcio:
 
@@ -33,13 +33,6 @@ class Fantacalcio:
         self._merged = pd.concat(
             [self._fanta_2026, self._fanta_2025, self._fanta_2024, self._fanta_2023, self._fanta_2022])
         self._votes = self.read_votes()
-        self.plots: dict[str, Figure | DataFrame | None] = {
-            "voteSummary": None,
-            "marketSummary": None,
-            "quotationChart": None,
-            "marketValueChart": None,
-            "voteTrendChart": None,
-        }
         self._calculated_data = {}
         self._top_players_data = {}
         self._executor = ThreadPoolExecutor(max_workers=2)
@@ -60,11 +53,9 @@ class Fantacalcio:
         thread_id = threading.get_ident()
         thread_name = threading.current_thread().name
         logging.info(f"Thread {thread_id} ({thread_name}) computing {to_analyze}")
-        for key in self.plots:
-            self.plots[key] = None
 
-        if to_analyze in self._calculated_data:
-            with self._lock:
+        with self._lock:
+            if to_analyze in self._calculated_data:
                 plots = self._calculated_data[to_analyze]
                 has_market_summary = plots is not None and "marketSummary" in plots
                 if has_market_summary:
@@ -166,7 +157,7 @@ class Fantacalcio:
 
     def summary_2026_market(self, df) -> dict[str, DataFrame | None]:
         player_history = df.copy()
-        team_played_in = player_history["Squadra"].unique().tolist()
+        team_played_in = player_history[["Squadra", "Anno"]]
         player_2026 = player_history[player_history["Anno"] == "2026"]
         if player_2026.empty:
             logging.info("No 2026 data available for the selected player")
@@ -174,7 +165,10 @@ class Fantacalcio:
                 "marketSummary": pd.DataFrame()
             }
         else:
-            squadre = ", ".join(team_played_in)
+            squadre = ", ".join(
+                f"{row.Squadra} ({row.Anno})"
+                for row in team_played_in.itertuples()
+            )
             row_2026 = player_2026.iloc[0]
             quotazione_attuale_2026 = row_2026["Quotazione Attuale"]
             quotazione_iniziale_2026 = row_2026["Quatozione Iniziale"]
@@ -228,6 +222,7 @@ class Fantacalcio:
         return player_votes
 
     def analyze_player_games(self, df, player_search, role=None) -> dict[str, DataFrame | None]:
+
         games: DataFrame | None = self.search_vote_player(df, player_search, role)
         if games is None:
             logging.info("No votes found for the player: " + player_search)
@@ -308,8 +303,7 @@ class Fantacalcio:
         summary_data = {
             "Categoria": [
                 "Nome", "Ruolo", "Partite Giocate", "% Partite Giocate ", "Totale Goal Fatti", "Goal Subiti",
-                "Totale Assist",
-                "Media Voto", "Minimo", "Massimo", "Mediana", "Deviazione standard", "Varianza",
+                "Totale Assist", "Media Voto", "Minimo", "Massimo", "Mediana", "Deviazione standard", "Varianza",
                 "Quantile 25%", "Quantile 75%", "Costanza", "Partite Sopra 10", "Partite Sopra 9",
                 "Partite Sopra 8", "Partite Sopra 7", "Partite Sopra 6", "Partite Sotto 6"
             ],
@@ -329,7 +323,11 @@ class Fantacalcio:
         if role in self._top_players_data:
             return self._top_players_data[role]
 
-        columns = ["Nome", "Ruolo", "Partite", "Media Voto"]
+        columns = [
+            "Nome", "Ruolo", "Partite", "Media Voto", "Minimo", "Massimo", "Mediana",
+            "Deviazione standard", "Varianza", "Partite Sopra 10", "Partite Sopra 9", "Partite Sopra 8",
+            "Partite Sopra 7", "Partite Sopra 6", "Partite Sotto 6"
+        ]
         filtered_df = self._merged[
             (self._merged["Ruolo"] == role)
             & (self._merged["Anno"].astype(str) == "2026")
@@ -355,6 +353,12 @@ class Fantacalcio:
                 continue
             if "Voto Fantacalcio" not in trend_df.columns:
                 continue
+
+            summary_values = summary_df.set_index("Categoria")["Valore"].to_dict()
+
+            def _summary_value(label: str) -> str:
+                value = summary_values.get(label)
+                return "" if value is None else str(value)
 
             media_row = summary_df[summary_df["Categoria"] == "Media Voto"]
             if media_row.empty:
@@ -384,7 +388,18 @@ class Fantacalcio:
                 "Nome": player_name,
                 "Ruolo": role,
                 "Partite": int(len(above_threshold)),
-                "Media Voto": round(media_voto, 2)
+                "Media Voto": round(media_voto, 2),
+                "Minimo": _summary_value("Minimo"),
+                "Massimo": _summary_value("Massimo"),
+                "Mediana": _summary_value("Mediana"),
+                "Deviazione standard": _summary_value("Deviazione standard"),
+                "Varianza": _summary_value("Varianza"),
+                "Partite Sopra 10": _summary_value("Partite Sopra 10"),
+                "Partite Sopra 9": _summary_value("Partite Sopra 9"),
+                "Partite Sopra 8": _summary_value("Partite Sopra 8"),
+                "Partite Sopra 7": _summary_value("Partite Sopra 7"),
+                "Partite Sopra 6": _summary_value("Partite Sopra 6"),
+                "Partite Sotto 6": _summary_value("Partite Sotto 6")
             })
 
         if not ranked_rows:

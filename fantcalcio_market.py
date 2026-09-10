@@ -16,6 +16,10 @@ class FantacalcioMarket:
     def get_total_credit(self) -> int:
         return self._credit
 
+    def set_total_credit(self, credit: int):
+        self._credit = credit
+        return self._credit
+
     def add_player(self, player: dict[str, str | float], role: str) -> bool:
         if self._credit < int(player['price']):
             return False

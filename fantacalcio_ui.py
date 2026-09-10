@@ -19,7 +19,6 @@ class FantacalcioUI:
         self._player_options = self._fc.all_names()
         self._market = FantacalcioMarket()
         self._player = ''
-        self._credit = 500
         if "input_price" not in st.session_state:
             st.session_state.input_price = 0.0
         if "reset_input_price" not in st.session_state:
@@ -39,8 +38,12 @@ class FantacalcioUI:
     def _action_buttons_section(self):
         now = dt.datetime.now()
         name_file = f"fanta_2026_{now.strftime('%Y_%m_%d_%H_%S')}.csv"
-        (button_col_1, button_col_2, spacer) = st.columns([1, 1, 10])
+        (button_col_1, button_col_2, button_col_3, spacer) = st.columns([1, 3, 3, 15])
         with button_col_1:
+            settings_button = st.button("", icon=":material/settings:", icon_position="left")
+            if settings_button:
+                self._open_settings_dialog()
+        with button_col_2:
             st.download_button(
                 label="Download",
                 data=self._market.download,
@@ -48,7 +51,7 @@ class FantacalcioUI:
                 mime="text/csv",
                 icon=":material/download:",
             )
-        with button_col_2:
+        with button_col_3:
             upload_button = st.button("Importa", icon=":material/upload_2:", icon_position="left")
             if upload_button:
                 self._import()
@@ -72,7 +75,7 @@ class FantacalcioUI:
                     placeholder="Seleziona un giocatore",
                 )
             with form_col_2:
-                price = st.number_input("Prezzo", key="input_price", min_value=0, step=1)
+                price = st.number_input("Prezzo", key="input_price", min_value=1, step=1)
 
             (button_col_1, button_col_2, button_col_3, spacer) = st.columns([1, 1, 1, 10])
             with button_col_1:
@@ -109,19 +112,19 @@ class FantacalcioUI:
         with col2:
             show_defender_button = st.button("👁️", key="show_defender")
             if show_defender_button:
-                self._open_dialog_with_best_players_by_group('D', limit=60)
+                self._open_dialog_with_best_players_by_group('D', limit=70)
             st.markdown("#### Difensori")
             self._write_Table(self._market.get_player_list_by_group('difensori'))
         with col3:
             show_center_button = st.button("👁️", key="show_center")
             if show_center_button:
-                self._open_dialog_with_best_players_by_group('C', limit=60)
+                self._open_dialog_with_best_players_by_group('C', limit=70)
             st.markdown("#### Centrocampisti")
             self._write_Table(self._market.get_player_list_by_group('centrocampisti'))
         with col4:
             show_attacker_button = st.button("👁️", key="show_attacker")
             if show_attacker_button:
-                self._open_dialog_with_best_players_by_group('A', limit=60)
+                self._open_dialog_with_best_players_by_group('A', limit=70)
             st.markdown("#### Attacanti")
             self._write_Table(self._market.get_player_list_by_group('attacanti'))
 
@@ -130,6 +133,21 @@ class FantacalcioUI:
         players_df = self._fc.get_best_possible_player_by_role(group, limit, avg_vote_threshold=4.5)
         st.subheader(f"Top {limit} Giocatori per Ruolo: {group}")
         st.dataframe(players_df)
+
+    @st.dialog("BestPlayers", width="large")
+    def _open_settings_dialog(self, ):
+        st.subheader("Impostazioni")
+        total_credit = st.number_input(
+            "Credito Totale",
+            min_value=1,
+            step=1,
+            value=self._market.get_total_credit(),
+            key="total_credit_input",
+        )
+        if st.button("Salva") and total_credit is not None:
+            self._market.set_total_credit(int(total_credit))
+            st.success("Impostazioni salvate con successo!")
+            st.rerun()
 
     def _write_Table(self, players):
         if len(players) == 0:
